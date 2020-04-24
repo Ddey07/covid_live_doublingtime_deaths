@@ -1,4 +1,4 @@
-# Covid-19-death
+# Covid-19-Deaths
 
 ## Loading data provided by JHU CSSE 
 
