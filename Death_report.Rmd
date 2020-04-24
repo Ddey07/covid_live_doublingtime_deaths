@@ -1,0 +1,348 @@
+---
+title: "Live Doublig-time of Deaths and R0 for deaths due to COVID-19"
+author: "Debangan Dey"
+date: "4/23/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, cache = TRUE, warning = FALSE, message=FALSE)
+library(eSIR)
+library(EpiNow)
+library(tidyverse)
+library(RColorBrewer)
+library(ggthemr)
+library(parallel)
+library(directlabels)
+library(ggforce)
+ggthemr("earth",text_size = 14,layout="scientific")
+nb.cols <- 50
+mycolors <- colorRampPalette(brewer.pal(12, "Paired"))(nb.cols)
+set_swatch(mycolors)
+### My edited function for time-varying R0
+estimateR0_DD <- function (cases = NULL, serial_intervals = NULL, rt_prior = NULL, 
+                           windows = NULL, si_samples = 100, rt_samples = 100, return_best = TRUE, 
+                           min_est_date = NULL) 
+{
+  if (length(unique(cases$import_status)) > 1) {
+    incid <- cases %>% dplyr::select(date, cases, import_status) %>% 
+      tidyr::spread(key = "import_status", value = "cases") %>% 
+      tidyr::complete(date = seq(min(date), max(date), 
+                                 by = "day"), fill = list(local = 0, imported = 0))
+    summed_cases <- incid %>% dplyr::rename(cases = local) %>% 
+      dplyr::select(-imported)
+  }
+  else {
+    incid <- cases %>% dplyr::select(date, cases) %>% dplyr::rename(I = cases) %>% 
+      tidyr::complete(date = seq(min(date), max(date), 
+                                 by = "day"), fill = list(I = 0))
+    summed_cases <- incid %>% dplyr::rename(cases = I)
+  }
+  min_case_date <- summed_cases %>% dplyr::filter(cases > 0) %>% 
+    dplyr::pull(date) %>% min()
+  wait_time <- as.numeric(min_est_date - min_case_date) + 1
+  if (wait_time > nrow(incid)) {
+    wait_time <- nrow(incid)
+  }
+  if (wait_time <= 2) {
+    wait_time <- 2
+  }
+  serial_intervals_index <- sample(1:ncol(serial_intervals), 
+                                   si_samples, replace = ncol(serial_intervals) < si_samples)
+  est_r <- purrr::map_dfr(serial_intervals_index, function(index) {
+    est_r <- purrr::map_dfr(windows, function(window) {
+      window_start <- seq(wait_time - window, nrow(incid) - 
+                            (window - 1))
+      window_end <- window_start + window - 1
+      R <- suppressWarnings(EpiEstim::estimate_R(incid, 
+                                                 method = "si_from_sample", si_sample = serial_intervals[, 
+                                                                                                         index], config = do.call(EpiEstim::make_config, 
+                                                                                                                                  c(rt_prior, list(t_start = window_start, t_end = window_end))))$R)
+      
+      R <- tidyr::drop_na(R, `Mean(R)`)
+      R_samples <- purrr::map2(R$`Mean(R)`, R$`Std(R)`, 
+                               function(mean, sd) {
+                                 theta <- sd^2/mean
+                                 k <- mean/theta
+                                 stats::rgamma(rt_samples, shape = k, scale = theta)
+                               })
+      out <- tibble::tibble(date = EpiNow::add_dates(incid$date, 
+                                                     length(R_samples)), R = purrr::map(R_samples, 
+                                                                                        ~tibble::tibble(R = ., sample = 1:length(.)))) %>% 
+        tidyr::unnest(R)
+      # preds <- out %>% dplyr::rename(rt = R) %>% dplyr::group_split(sample) %>% 
+      #   purrr::map_dfr(~EpiSoon::predict_current_cases(rts = dplyr::select(., 
+      #                                                                      -sample), cases = summed_cases, serial_interval = serial_intervals[, 
+      #                                                                                                                                         index]), .id = "sample") %>% dplyr::mutate(sample = as.numeric(sample), 
+      #                                                                                                                                                                                    horizon = 0) %>% dplyr::select(date, cases, sample, 
+      #                                                                                                                                                                                                                   horizon)
+      # 
+      # 
+      # scores <- EpiSoon::score_case_forecast(preds, summed_cases)
+      # summarised_score <- scores %>% dplyr::summarise(mean = mean(crps, 
+      #                                                             na.rm = TRUE), sd = sd(crps, na.rm = TRUE))
+      # out <- out %>% dplyr::mutate(score = summarised_score$mean, 
+      #                              score_sd = summarised_score$sd, window = window)
+      return(out)
+    })
+    if (return_best) {
+      est_r <- est_r %>% dplyr::filter(score == min(score)) %>% 
+        dplyr::filter(window == min(window)) %>% dplyr::select(-score, 
+                                                               -score_sd)
+    }
+    return(est_r)
+  }, .id = "si_sample")
+  if (si_samples == 1) {
+    return(est_r)
+  }
+  else {
+    est_r <- dplyr::mutate(est_r, sample = sample * as.numeric(si_sample)) %>% 
+      dplyr::select(-si_sample)
+    return(est_r)
+  }
+}
+```
+
+## Loading data provided by JHU CSSE 
+
+The data is downloaded from [COVID-19 Data Hub on Tableau](https://www.tableau.com/covid-19-coronavirus-data-resources) which uses data compiled by JHU CSSE to report daily time series of cases and deaths. 
+
+```{r read}
+df <- read_csv("https://query.data.world/s/b5o6u74wlqgwjxlfbzupnu4f6t27sj")
+df$Date <- as.Date(df$Date, format=c("%m/%d/%Y"))
+```
+
+The methodology used by [CMMID](https://cmmid.github.io/topics/covid19/) for estimating time-varying transmission rate, doubling time, R0 was replicated in the time-series data for deaths and calculated accordingly. Interpretation is listed below:
+
+- *Doubling time*: The time taken by a country or state to double its cumulative death count due to COVID-19. (Ideally, we want it to increase to infinity in the long run, the more the better)
+
+- *R0 fo death*: Approximately how many deaths are happening for a single occurrence of death? (Ideally, we want to decrease this to < 1). Death data is more reliable than cases data and this can sort of give an intuition on the current spread of disease in different population.
+
+```{r, echo= FALSE}
+### Function to get doubling time, R0, growth for deaths in different country
+death.plot <- function(state,type=NULL){
+  
+  if(type=="Country"){
+    state_confirmed_ts <- df %>% filter(Country_Region==state & Case_Type=="Confirmed") %>% arrange(Date) %>% group_by(Date) %>% summarize(Case=sum(as.numeric(Difference),na.rm=TRUE)) %>% select(Case)
+    state_death_ts <- df %>% filter(Country_Region==state & Case_Type=="Deaths") %>% arrange(Date) %>% group_by(Date) %>% summarize(Case=sum(as.numeric(Difference),na.rm=TRUE)) %>% select(Case)
+    date.report <- df %>% filter(Country_Region==state & Case_Type=="Deaths") %>% arrange(Date) %>% group_by(Date) %>% summarize(Case=sum(as.numeric(Difference),na.rm=TRUE)) %>% select(Date)
+    
+  } else {
+    state_confirmed_ts <- df %>% filter(Province_State==state & Case_Type=="Confirmed") %>% arrange(Date) %>% group_by(Date) %>% summarize(Case=sum(as.numeric(Difference),na.rm=TRUE)) %>% select(Case)
+    state_death_ts <- df %>% filter(Province_State==state & Case_Type=="Deaths") %>% arrange(Date) %>% group_by(Date) %>% summarize(Case=sum(as.numeric(Difference),na.rm=TRUE)) %>% select(Case)
+    date.report <- df %>% filter(Province_State==state & Case_Type=="Deaths") %>% arrange(Date) %>% group_by(Date) %>% summarize(Case=sum(as.numeric(Difference),na.rm=TRUE)) %>% select(Date)
+  }
+  
+  idx = which(cumsum(state_death_ts$Case)>3)
+  cases.md <-  data.frame(date=date.report[min(idx):max(idx),],cases=state_confirmed_ts[min(idx):max(idx),],deaths=state_death_ts[min(idx):max(idx),])
+  colnames(cases.md) <- c("date","cases","deaths")
+  
+  cases.md.death <- data.frame(date=cases.md$date,cases=cases.md$deaths)
+  cases.md.death <- subset(cases.md.death,cases>0)
+  
+  dt.df=NULL
+  R0.df=NULL
+  
+  if(nrow(cases.md.death)>7){
+
+  serial_intervals <- as.matrix(EpiNow::covid_serial_intervals[,1])
+  rt_prior <- list(mean_prior = 2.6, std_prior = 2) 
+  windows <- c(1, 3)
+  R0.md <-  estimateR0_DD(cases.md.death, serial_intervals, 
+                          rt_prior = rt_prior, windows = windows,
+                          rt_samples = 100, si_samples = 100, return_best = FALSE, min_est_date = cases.md.death$date[1]+4)
+  
+  R0.df <- R0.md %>% group_by(date) %>% summarize(se=sd(R),R=mean(R))
+  R0.df$state <- state
+  
+  # p1 <- R0.md %>% group_by(date) %>% summarize(se=sd(R),R=mean(R)) %>% ggplot(aes(x=date, y=R)) + 
+  #   geom_ribbon(aes(ymin=R-se, ymax=R+se), alpha=0.3) +
+  #   geom_point(position=pd) + labs(title=paste0("Time-varying R0 for ", state), y="Reproductive number (R0)", x="Time") + geom_line() + scale_x_date(date_breaks = "weeks" , date_labels = "%b-%d") +
+  #   theme(plot.title=element_text(size=18),plot.subtitle = element_text(size=14))  
+  
+  
+  cases.md.death$cases <- cumsum(cases.md.death$cases)
+  t.md <- estimate_time_varying_r(list(cases.md.death),window=7)
+  
+  dt.df <- t.md %>% filter(vars=="doubling_time")
+  dt.df$state <- state
+  
+  # p4 <- t.md %>% filter(vars=="doubling_time") %>% ggplot(aes(x=date, y=mean)) + 
+  #   geom_ribbon(aes(ymin=lower, ymax=upper), alpha=0.3) + labs(title=paste0("Time-varying Doubling-Time for Deaths in ", state), y="Doubling-time", x="Time") + geom_line() + scale_x_date(date_breaks = "weeks" , date_labels = "%b-%d") +
+  #   theme(plot.title=element_text(size=18),plot.subtitle = element_text(size=14))  
+  
+  # p5 <- cases.md.death %>% ggplot(aes(x=date, y=cases/19.54)) + 
+  #   +      labs(title=paste0("Deaths in ", state), y="Number of deaths per million", x="Time") + geom_line() + scale_x_date(date_breaks = "weeks" , date_labels = "%b-%d") +
+  #   +     theme(plot.title=element_text(size=18),plot.subtitle = element_text(size=14)) 
+  
+  cases.md.death$state <- state
+  }
+  return(list(dt=dt.df,R0=R0.df,death.ts=cases.md.death))
+}
+```
+
+
+```{r pressure, echo=FALSE}
+# death.list <- NULL
+# death.country <- function(x){death.plot(state=x,type="Country")}
+# 
+# death.list <- mclapply(unique(df$Country_Region),function(x){tryCatch(death.country(x),error=function(e) 10)},mc.cores = 2)
+# #death.list <- mclapply(unique(df$Country_Region),function(x){death.plot(state=x,type="Country")},mc.cores = 4)
+# 
+# us_state <- df %>% filter(Country_Region=="US") %>% select(Province_State) %>% unique()
+# death.list.us <- mclapply(unlist(us_state),function(x){tryCatch(death.plot(state=x,type="State"),error=function(e) 10)},mc.cores = 2)
+load("Data/death_us_states.RData")
+load("Data/death_countries.RData")
+
+```
+
+## Doubling-time of Deaths
+
+```{r, echo= FALSE}
+comp.ind <- sapply(death.list, function(x){if(!is.list(x)){x==10} else {is.null(x$dt)}})
+death.list.comp <- death.list[which(!comp.ind)]
+
+dt.df <- lapply(death.list.comp,function(x){x$dt}) %>% bind_rows()
+death.ts.df <- lapply(death.list.comp,function(x){x$death.ts}) %>% bind_rows()
+death.ts.df <- df %>% filter(Case_Type=="Deaths" & Cases>0) %>% group_by(Country_Region,Date) %>% summarise(cases=sum(Cases,na.rm = TRUE)) %>% mutate(state=Country_Region)
+min.ts <- death.ts.df %>% group_by(state) %>% summarise(min_date=min(Date))
+death.ts.df <- right_join(death.ts.df,min.ts)
+death.ts.df$time_since <- as.numeric(death.ts.df$Date - death.ts.df$min_date)
+tot.deaths <- death.ts.df %>% group_by(state) %>% summarise(deaths=max(cases))
+threshold <-100
+state.int <- tot.deaths$state[which(tot.deaths$deaths>threshold)]
+#dt.df$mean[which(is.infinite(dt.df$mean))] = dt.df$mean[which(is.infinite(dt.df$mean))-1]
+state.int <- tot.deaths$state[which(tot.deaths$deaths>threshold)]
+
+comp.ind.us <- sapply(death.list.us, function(x){if(!is.list(x)){x==10} else {is.null(x$dt)}})
+death.list.us.comp <- death.list.us[which(!comp.ind.us)]
+dt.us.df <- lapply(death.list.us.comp,function(x){x$dt}) %>% bind_rows()
+death.ts.us.df <- lapply(death.list.us.comp,function(x){x$death.ts}) %>% bind_rows()
+death.ts.us.df <- df %>% filter(Country_Region=="US" & Case_Type=="Deaths" & Cases>0) %>% group_by(Province_State,Date) %>% summarise(cases=sum(Cases,na.rm = TRUE)) %>% mutate(state=Province_State)
+min.ts.us <- death.ts.us.df %>% group_by(state) %>% summarise(min_date=min(Date))
+death.ts.us.df <- right_join(death.ts.us.df,min.ts.us)
+death.ts.us.df$time_since <- as.numeric(death.ts.us.df$Date - death.ts.us.df$min_date)
+tot.deaths.us <- death.ts.us.df %>% group_by(state) %>% summarise(deaths=max(cases))
+threshold <- 25
+state.int.us <- tot.deaths.us$state[which(tot.deaths.us$deaths>threshold)]
+```
+
+### Country-wise trajectory (minimum 100 deaths)
+
+```{r, fig.height = 8, fig.width = 14, echo = FALSE}
+dt.df %>% filter(state %in% state.int) %>% ggplot(aes(x=min_time,y=log10(mean), group=state,color=state)) + geom_line() + 
+  geom_dl(aes(label = state), method = list(dl.trans(x = x - 1, y= y+0.1),dl.combine("last.points"), cex = 1))  + xlim (c(0,50)) + ylim(c(0,2)) + 
+  labs(title="Time-varying Doubling-time of deaths (log scale)", subtitle="For Countries with more than 100 deaths", x= "Time since minimum 4 deaths are recorded (in days)", y=expression(paste(log[10],"(Doubling Time)")))
+```
+
+## Time-varying doubling-time of deaths in Countries {.tabset}
+
+```{r, results='asis'}
+n <- length(state.int)
+
+# Make main plot
+plot <- dt.df %>% filter(state %in% state.int) %>% ggplot(aes(x=min_time,y=log10(mean))) + geom_line() + labs(title="Time-varying Doubling-time of deaths (log scale)", x= "Time since minimum 4 deaths are recorded (in days)", y=expression(paste(log[10],"(Doubling Time)"))) 
+
+# Facet_*_paginate loop over facets
+plots <- lapply(seq_len(n), function(i) {
+  plot + facet_wrap_paginate(~ state, ncol = 1, nrow = 1, page = i, scales="free")+ geom_ribbon(aes(ymin=log10(mean) + ((upper-mean)/mean), ymax=log10(mean) - ((upper-mean)/mean), x=min_time), alpha = 0.3)
+})
+
+# Print a tab and a plot for each n
+# Important to set "results = 'asis'" in chunk options
+for (i in seq_len(n)) {
+  cat(paste0("\n\n### ",state.int[i],"\n"))
+  print(plots[[i]])
+}
+```
+
+## US State trajectory (minimum 25 deaths)
+```{r, fig.height = 8, fig.width = 14, echo = FALSE}
+dt.us.df %>% filter(state %in% state.int.us) %>% ggplot(aes(x=min_time,y=log(mean), group=state,color=state))+ geom_line() + 
+  geom_dl(aes(label = state), method = list(dl.trans(x = x - 1, y= y+0.1),dl.combine("last.points"), cex = 1))  + xlim(c(0,40)) +
+  labs(title="Time-varying Doubling-time of deaths (log scale)", subtitle="For US states with more than 25 deaths", x= "Time since minimum 4 deaths are recorded (in days)", y=expression(paste(log[10],"(Doubling Time)")))  
+```
+
+## Time-varying doubling-time of deaths in US States {.tabset}
+
+```{r, results='asis'}
+n <- length(state.int.us)
+
+# Make main plot
+plot <- dt.us.df %>% filter(state %in% state.int.us) %>% ggplot(aes(x=min_time,y=log10(mean))) + geom_line() + labs(title="Time-varying Doubling-time of deaths (log scale)", x= "Time since minimum 4 deaths are recorded (in days)", y=expression(paste(log[10],"(Doubling Time)")))
+
+# Facet_*_paginate loop over facets
+plots <- lapply(seq_len(n), function(i) {
+  plot + facet_wrap_paginate(~ state, ncol = 1, nrow = 1, page = i,scales="free")+ geom_ribbon(aes(ymin=log10(mean) + ((upper-mean)/mean), ymax=log10(mean) - ((upper-mean)/mean), x=min_time), alpha = 0.3)
+})
+
+# Print a tab and a plot for each n
+# Important to set "results = 'asis'" in chunk options
+for (i in seq_len(n)) {
+  cat(paste0("\n\n### ",state.int.us[i],"\n"))
+  print(plots[[i]])
+}
+```
+
+<!-- ## R0 of Deaths -->
+
+```{r, echo=FALSE}
+
+R0.df <- lapply(death.list.comp,function(x){x$R0}) %>% bind_rows()
+min.date <- R0.df %>% group_by(state) %>% summarise(min_date=min(date))
+R0.df <- right_join(R0.df,min.date)
+R0.df$time_since <- as.numeric(R0.df$date - R0.df$min_date)
+
+R0.us.df <- lapply(death.list.us.comp,function(x){x$R0}) %>% bind_rows()
+min.date.us <- R0.us.df %>% group_by(state) %>% summarise(min_date=min(date))
+R0.us.df <- right_join(R0.us.df,min.date.us)
+R0.us.df$time_since <- as.numeric(R0.us.df$date - R0.us.df$min_date)
+```
+
+```{r, fig.height = 8, fig.width = 14, echo = FALSE}
+# R0.df %>% filter(state %in% state.int) %>% ggplot(aes(x=time_since,y=R, group=state,color=state)) + geom_line() + 
+#   geom_dl(aes(label = state), method = list(dl.trans(x = x - 1, y= y+0.1),dl.combine("last.points"), cex = 1))  + xlim (c(0,50)) + ylim(c(0,5)) +
+#   labs(title="Time-varying R0 of deaths (log scale)", subtitle="For Countries with more than 100 deaths", x= "Time since minimum 4 deaths are recorded (in days)", y="R0 of deaths")  
+
+```
+
+## Time-varying R0 of death for different countries {.tabset}
+
+```{r, results='asis'}
+n <- length(state.int)
+
+# Make main plot
+plot <-R0.df %>% filter(state %in% state.int) %>% ggplot(aes(x=time_since,y=R)) + geom_line() + labs(title="Time-varying R0 of deaths",x= "Time since minimum 4 deaths are recorded (in days)", y="R0 of deaths") 
+# Facet_*_paginate loop over facets
+plots <- lapply(seq_len(n), function(i) {
+  plot + facet_wrap_paginate(~ state, ncol = 1, nrow = 1, page = i,  scales="free")+ geom_ribbon(aes(ymin=R-1.96*se, ymax=R+1.96*se, x=time_since), alpha = 0.3)
+})
+
+# Print a tab and a plot for each n
+# Important to set "results = 'asis'" in chunk options
+for (i in seq_len(n)) {
+  cat(paste0("\n\n### ",state.int[i],"\n"))
+  print(plots[[i]])
+}
+```
+
+## Time-varying R0 of death for US states {.tabset}
+
+```{r, results='asis'}
+n <- length(state.int.us)
+
+# Make main plot
+plot <- R0.us.df %>% filter(state %in% state.int.us) %>% ggplot(aes(x=time_since,y=R)) + geom_line() + labs(title="Time-varying R0 of deaths",x= "Time since minimum 4 deaths are recorded (in days)", y="R0 of deaths") 
+# Facet_*_paginate loop over facets
+plots <- lapply(seq_len(n), function(i) {
+  plot + facet_wrap_paginate(~ state, ncol = 1, nrow = 1, page = i, scales="free")+ geom_ribbon(aes(ymin=R-1.96*se, ymax=R+1.96*se, x=time_since), alpha = 0.3)
+})
+
+# Print a tab and a plot for each n
+# Important to set "results = 'asis'" in chunk options
+for (i in seq_len(n)) {
+  cat(paste0("\n\n### ",state.int.us[i],"\n"))
+  print(plots[[i]])
+}
+```
+
