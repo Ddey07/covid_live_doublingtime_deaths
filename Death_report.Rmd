@@ -1,12 +1,12 @@
 ---
-title: "Live Doublig-time of Deaths and R0 for deaths due to COVID-19"
+title: "Live Doubling-time of Deaths and R0 for deaths due to COVID-19"
 author: "Debangan Dey"
-date: "4/23/2020"
+date: '`r format(Sys.Date()-1, "%B %d, %Y")`'
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, cache = TRUE, warning = FALSE, message=FALSE)
+knitr::opts_chunk$set(echo = FALSE, cache = FALSE, warning = FALSE, message=FALSE)
 library(eSIR)
 library(EpiNow)
 library(tidyverse)
@@ -15,6 +15,8 @@ library(ggthemr)
 library(parallel)
 library(directlabels)
 library(ggforce)
+x.lim.country <- 52
+x.lim.state <- 42
 ggthemr("earth",text_size = 14,layout="scientific")
 nb.cols <- 50
 mycolors <- colorRampPalette(brewer.pal(12, "Paired"))(nb.cols)
@@ -191,6 +193,9 @@ death.plot <- function(state,type=NULL){
 # 
 # us_state <- df %>% filter(Country_Region=="US") %>% select(Province_State) %>% unique()
 # death.list.us <- mclapply(unlist(us_state),function(x){tryCatch(death.plot(state=x,type="State"),error=function(e) 10)},mc.cores = 2)
+
+## Takes too long to run the code, so, I am saving the data previously and loading the data for analysis from save data
+
 load("Data/death_us_states.RData")
 load("Data/death_countries.RData")
 
@@ -231,7 +236,7 @@ state.int.us <- tot.deaths.us$state[which(tot.deaths.us$deaths>threshold)]
 
 ```{r, fig.height = 8, fig.width = 14, echo = FALSE}
 dt.df %>% filter(state %in% state.int) %>% ggplot(aes(x=min_time,y=log10(mean), group=state,color=state)) + geom_line() + 
-  geom_dl(aes(label = state), method = list(dl.trans(x = x - 1, y= y+0.1),dl.combine("last.points"), cex = 1))  + xlim (c(0,50)) + ylim(c(0,2)) + 
+  geom_dl(aes(label = state), method = list(dl.trans(x = x - 1, y= y+0.1),dl.combine("last.points"), cex = 1))  + xlim (c(0,x.lim.country)) + ylim(c(0,2)) + 
   labs(title="Time-varying Doubling-time of deaths (log scale)", subtitle="For Countries with more than 100 deaths", x= "Time since minimum 4 deaths are recorded (in days)", y=expression(paste(log[10],"(Doubling Time)")))
 ```
 
@@ -259,7 +264,7 @@ for (i in seq_len(n)) {
 ## US State trajectory (minimum 25 deaths)
 ```{r, fig.height = 8, fig.width = 14, echo = FALSE}
 dt.us.df %>% filter(state %in% state.int.us) %>% ggplot(aes(x=min_time,y=log(mean), group=state,color=state))+ geom_line() + 
-  geom_dl(aes(label = state), method = list(dl.trans(x = x - 1, y= y+0.1),dl.combine("last.points"), cex = 1))  + xlim(c(0,40)) +
+  geom_dl(aes(label = state), method = list(dl.trans(x = x - 1, y= y+0.1),dl.combine("last.points"), cex = 1))  + xlim(c(0,x.lim.state)) +
   labs(title="Time-varying Doubling-time of deaths (log scale)", subtitle="For US states with more than 25 deaths", x= "Time since minimum 4 deaths are recorded (in days)", y=expression(paste(log[10],"(Doubling Time)")))  
 ```
 

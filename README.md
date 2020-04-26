@@ -8,4 +8,4 @@ The methodology used by [CMMID](https://cmmid.github.io/topics/covid19/) for est
 
 - *R0 fo death*: How many deaths are happening for a single occurrence of death? (Ideally, we want to decrease this to < 1). Death data is more reliable than cases data and this can sort of give an intuition on the current spread of disease in different countries/states.
 
-You can view the analysis at [this link](https://ddey07.github.io/covid_live_doublingtime_deaths/)
+You can view the analysis at [this link](https://ddey07.github.io/covid_live_doublingtime_deaths/) and the code is provided at the *Deaths_report.RMD* file in this repository and the necessary data to run the Rmarkdown files are in the *Data* subfolder for reproducibility. 
