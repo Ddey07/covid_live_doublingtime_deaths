@@ -107,7 +107,7 @@ estimateR0_DD <- function (cases = NULL, serial_intervals = NULL, rt_prior = NUL
 
 ## Loading data provided by JHU CSSE 
 
-The data is downloaded from [COVID-19 Data Hub on Tableau](https://www.tableau.com/covid-19-coronavirus-data-resources) which uses data compiled by JHU CSSE to report daily time series of cases and deaths. 
+The data is downloaded from [COVID-19 Data Hub on Tableau](https://www.tableau.com/covid-19-coronavirus-data-resources) which uses data compiled by JHU CSSE to report daily time series of confirmed cases and deaths. 
 
 ```{r read}
 df <- read_csv("https://query.data.world/s/b5o6u74wlqgwjxlfbzupnu4f6t27sj")
@@ -118,7 +118,7 @@ The methodology used by [CMMID](https://cmmid.github.io/topics/covid19/) for est
 
 - *Doubling time*: The time taken by a country or state to double its cumulative death count due to COVID-19. (Ideally, we want it to increase to infinity in the long run, the more the better)
 
-- *R0 fo death*: Approximately how many deaths are happening for a single occurrence of death? (Ideally, we want to decrease this to < 1). Death data is more reliable than cases data and this can sort of give an intuition on the current spread of disease in different population.
+- *R0 for death*: Approximately how many deaths are happening for a single occurrence of death? (Ideally, we want to decrease this to < 1). Death data is more reliable than cases data and this can sort of give an intuition on the current spread of disease in different population.
 
 ```{r, echo= FALSE}
 ### Function to get doubling time, R0, growth for deaths in different country
