@@ -18,7 +18,7 @@ library(ggforce)
 x.lim.country <- 55
 x.lim.state <- 45
 ggthemr("earth",text_size = 16,layout="scientific")
-nb.cols <- 54
+nb.cols <- 55
 mycolors <- colorRampPalette(brewer.pal(12, "Paired"))(nb.cols)
 set_swatch(mycolors)
 ### My edited function for time-varying R0
