@@ -15,8 +15,8 @@ library(ggthemr)
 library(parallel)
 library(directlabels)
 library(ggforce)
-x.lim.country <- 59
-x.lim.state <- 49
+x.lim.country <- 60
+x.lim.state <- 50
 ggthemr("earth",text_size = 16,layout="scientific")
 nb.cols <- 65
 mycolors <- colorRampPalette(brewer.pal(12, "Paired"))(nb.cols)
