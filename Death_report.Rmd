@@ -317,7 +317,7 @@ R0.us.df$time_since <- as.numeric(R0.us.df$date - R0.us.df$min_date)
 n <- length(state.int)
 
 # Make main plot
-plot <-R0.df %>% filter(state %in% state.int) %>% ggplot(aes(x=time_since,y=R)) + geom_line() + labs(title="Time-varying R0 of deaths",x= "Time since minimum 4 deaths are recorded (in days)", y="R0 of deaths") 
+plot <-R0.df %>% filter(R <= 10) %>% filter(state %in% state.int) %>% ggplot(aes(x=time_since,y=R)) + geom_line() + labs(title="Time-varying R0 of deaths",x= "Time since minimum 4 deaths are recorded (in days)", y="R0 of deaths") 
 # Facet_*_paginate loop over facets
 plots <- lapply(seq_len(n), function(i) {
   plot + facet_wrap_paginate(~ state, ncol = 1, nrow = 1, page = i,  scales="free_x")+ geom_ribbon(aes(ymin=R-1.96*se, ymax=R+1.96*se, x=time_since), alpha = 0.3)
