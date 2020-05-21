@@ -15,10 +15,10 @@ library(ggthemr)
 library(parallel)
 library(directlabels)
 library(ggforce)
-x.lim.country <- 65
-x.lim.state <- 55
+x.lim.country <- 68
+x.lim.state <- 58
 ggthemr("earth",text_size = 16,layout="scientific")
-nb.cols <- 80
+nb.cols <- 85
 mycolors <- colorRampPalette(brewer.pal(12, "Paired"))(nb.cols)
 set_swatch(mycolors)
 ### My edited function for time-varying R0
